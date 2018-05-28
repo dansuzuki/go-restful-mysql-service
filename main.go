@@ -1,77 +1,132 @@
-/*
- * From https://www.codementor.io/codehakase/building-a-restful-api-with-golang-a6yivzqdo
- */
-
 package main
 
 import (
+    "database/sql"
     "encoding/json"
     "github.com/gorilla/mux"
     "log"
     "net/http"
+    "strconv"
 )
 
-// The person Type (more like an object)
-type Person struct {
-    ID        string   `json:"id,omitempty"`
-    Firstname string   `json:"firstname,omitempty"`
-    Lastname  string   `json:"lastname,omitempty"`
-    Address   *Address `json:"address,omitempty"`
-}
-type Address struct {
-    City  string `json:"city,omitempty"`
-    State string `json:"state,omitempty"`
+import _ "github.com/go-sql-driver/mysql"
+
+type Contact struct {
+  ID            int64     `json:"id,omitempty"`
+  FirstName     string  `json:"first_name,omitempty"`
+  LastName      string  `json:"last_name,omitempty"`
+  Age           int     `json:"age,omitempty"`
+  MobileNumber  string  `json:"mobile_number,omitempty"`
 }
 
-var people []Person
-
-// Display all from the people var
-func GetPeople(w http.ResponseWriter, r *http.Request) {
-    json.NewEncoder(w).Encode(people)
-}
-
-// Display a single data
-func GetPerson(w http.ResponseWriter, r *http.Request) {
+func GetContact(db *sql.DB) func (http.ResponseWriter, *http.Request) {
+  return func (w http.ResponseWriter, r *http.Request) {
     params := mux.Vars(r)
-    for _, item := range people {
-        if item.ID == params["id"] {
-            json.NewEncoder(w).Encode(item)
-            return
-        }
+    id, _ := strconv.ParseInt(params["id"], 10, 64)
+    contact, _ := QueryContactByID(db, id)
+    json.NewEncoder(w).Encode(contact)
+  }
+}
+
+func QueryContactByID(db *sql.DB, id int64) (Contact, error) {
+  var contact Contact
+  contact.ID = id
+  err := db.QueryRow("SELECT first_name, last_name, age, mobile_number FROM contacts WHERE id=?", id).Scan(&contact.FirstName, &contact.LastName, &contact.Age, &contact.MobileNumber)
+  if err != nil {
+    log.Fatal(err)
+  }
+  return contact, err
+}
+
+func GetContacts(db *sql.DB) func (http.ResponseWriter, *http.Request) {
+  return func (w http.ResponseWriter, r *http.Request) {
+    contacts, err := QueryContacts(db)
+    if err != nil {
+      log.Fatal(err)
     }
-    json.NewEncoder(w).Encode(&Person{})
+    json.NewEncoder(w).Encode(contacts)
+  }
 }
 
-// create a new item
-func CreatePerson(w http.ResponseWriter, r *http.Request) {
+func QueryContacts(db *sql.DB) ([]Contact, error) {
+  var contacts []Contact
+  rows, err := db.Query("select id, first_name, last_name, age, mobile_number from contacts")
+  if err != nil {
+  	log.Fatal(err)
+  }
+  defer rows.Close()
+  for rows.Next() {
+    var contact Contact
+  	err := rows.Scan(&contact.ID, &contact.FirstName, &contact.LastName, &contact.Age, &contact.MobileNumber)
+  	if err != nil {
+  		log.Fatal(err)
+  	}
+  	contacts = append(contacts, contact)
+  }
+  err = rows.Err()
+  if err != nil {
+  	log.Fatal(err)
+  }
+  return contacts, err
+}
+
+func CreateContact(db *sql.DB) func (http.ResponseWriter, *http.Request) {
+  return func (w http.ResponseWriter, r *http.Request) {
+    var contact Contact
+    _ = json.NewDecoder(r.Body).Decode(&contact)
+    InsertContact(db, &contact)
+    w.WriteHeader(201)
+    json.NewEncoder(w).Encode(contact)
+  }
+}
+
+func InsertContact(db *sql.DB, contact *Contact) error {
+  res, err := db.Exec(
+    "INSERT INTO contacts(first_name, last_name, age, mobile_number) VALUES(?, ?, ?, ?)",
+    contact.FirstName, contact.LastName, contact.Age, contact.MobileNumber)
+  contact.ID, err = res.LastInsertId()
+  return err
+}
+
+func RemoveContact(db *sql.DB) func (http.ResponseWriter, *http.Request) {
+  return func (w http.ResponseWriter, r *http.Request) {
     params := mux.Vars(r)
-    var person Person
-    _ = json.NewDecoder(r.Body).Decode(&person)
-    person.ID = params["id"]
-    people = append(people, person)
-    json.NewEncoder(w).Encode(people)
+    id, _ := strconv.ParseInt(params["id"], 10, 64)
+    DeleteContact(db, id)
+    w.WriteHeader(204)
+  }
 }
 
-// Delete an item
-func DeletePerson(w http.ResponseWriter, r *http.Request) {
-    params := mux.Vars(r)
-    for index, item := range people {
-        if item.ID == params["id"] {
-            people = append(people[:index], people[index+1:]...)
-            break
-        }
-        json.NewEncoder(w).Encode(people)
-    }
+func DeleteContact(db *sql.DB, id int64) error {
+  _, err := db.Exec(
+    "DELETE FROM contacts WHERE id = ?", id)
+  return err
 }
 
-// main function to boot up everything
 func main() {
-    router := mux.NewRouter()
-    people = append(people, Person{ID: "1", Firstname: "John", Lastname: "Doe", Address: &Address{City: "City X", State: "State X"}})
-    people = append(people, Person{ID: "2", Firstname: "Koko", Lastname: "Doe", Address: &Address{City: "City Z", State: "State Y"}})
-    router.HandleFunc("/people", GetPeople).Methods("GET")
-    router.HandleFunc("/people/{id}", GetPerson).Methods("GET")
-    router.HandleFunc("/people/{id}", CreatePerson).Methods("POST")
-    router.HandleFunc("/people/{id}", DeletePerson).Methods("DELETE")
-    log.Fatal(http.ListenAndServe(":8000", router))
+  /**
+   CREATE DATABASE phonebook;
+   CREATE TABLE contacts (
+     id int not null auto_increment,
+     first_name varchar(50),
+     last_name varchar(50),
+     age int,
+     mobile_number varchar(20),
+     primary key(id)
+   );
+   */
+  db, err := sql.Open("mysql", "dbuser:changeme@tcp(localhost:3306)/phonebook")
+  if err != nil {
+    log.Fatal(err)
+  }
+  defer db.Close()
+
+  router := mux.NewRouter()
+  router.HandleFunc("/contacts", GetContacts(db)).Methods("GET")
+  router.HandleFunc("/contacts/{id}", GetContact(db)).Methods("GET")
+  router.HandleFunc("/contacts", CreateContact(db)).Methods("POST")
+  router.HandleFunc("/contacts/{id}", RemoveContact(db)).Methods("DELETE")
+
+  // TODO: derive the port number from arguments
+  log.Fatal(http.ListenAndServe(":8000", router))
 }
