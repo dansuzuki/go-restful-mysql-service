@@ -103,6 +103,25 @@ func DeleteContact(db *sql.DB, id int64) error {
   return err
 }
 
+func ModifyContact(db *sql.DB) func (http.ResponseWriter, *http.Request) {
+  return func (w http.ResponseWriter, r *http.Request) {
+    params := mux.Vars(r)
+    id, _ := strconv.ParseInt(params["id"], 10, 64)
+    var contact Contact
+    _ = json.NewDecoder(r.Body).Decode(&contact)
+    contact.ID = id
+    UpdateContact(db, &contact)
+    w.WriteHeader(200)
+  }
+}
+
+func UpdateContact(db *sql.DB, contact *Contact) error {
+  _, err := db.Exec(
+    "UPDATE contacts SET first_name = ?, last_name = ?, age = ?, mobile_number = ? WHERE id = ?",
+    contact.FirstName, contact.LastName, contact.Age, contact.MobileNumber, contact.ID)
+  return err
+}
+
 func main() {
   /**
    CREATE DATABASE phonebook;
@@ -125,6 +144,7 @@ func main() {
   router.HandleFunc("/contacts", GetContacts(db)).Methods("GET")
   router.HandleFunc("/contacts/{id}", GetContact(db)).Methods("GET")
   router.HandleFunc("/contacts", CreateContact(db)).Methods("POST")
+  router.HandleFunc("/contacts/{id}", ModifyContact(db)).Methods("PUT")
   router.HandleFunc("/contacts/{id}", RemoveContact(db)).Methods("DELETE")
 
   // TODO: derive the port number from arguments
